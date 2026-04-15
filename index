@@ -1,0 +1,229 @@
+<!DOCTYPE html>
+<html lang="zh-TW">
+<head>
+    <script src="https://cdnjs.cloudflare.com/ajax/libs/p5.js/1.9.0/p5.js"></script>
+    <script src="https://cdnjs.cloudflare.com/ajax/libs/p5.js/1.9.0/addons/p5.sound.min.js"></script>
+    <script src="https://unpkg.com/ml5@1/dist/ml5.min.js"></script>
+    <style>
+        body { margin: 0; padding: 0; overflow: hidden; background-color: #0a0a1e; }
+        canvas { display: block; }
+    </style>
+</head>
+<body>
+<script>
+let fireflies = [];
+let targetPoints = [];
+let formed = false;
+let exploded = false;
+let input = "";
+let correct = false;
+
+// 攝影機與 AI 變數
+let video;
+let faceMesh;
+let faces = [];
+let photoTaken = false;
+let bgMusic;
+
+// 狀態控制：INPUT (輸入), DETECTING (偵測臉), CELEBRATING (聚集慶祝)
+let state = "INPUT";
+
+function preload() {
+    // 這裡放生日快樂歌的連結
+    bgMusic = loadSound('https://mainline.i3s.unice.fr/p5js/music/happy_birthday.mp3'); 
+}
+
+function setup() {
+    createCanvas(windowWidth, windowHeight);
+    
+    // 初始化 800 個螢火蟲
+    for (let i = 0; i < 800; i++) {
+        fireflies.push(new Firefly(random(width), random(height)));
+    }
+
+    // 初始化攝影機（隱藏，背景執行偵測）
+    video = createCapture(VIDEO);
+    video.size(640, 480);
+    video.hide();
+
+    // 初始化 ml5 人臉偵測 (FaceMesh)
+    faceMesh = ml5.faceMesh(video, { maxFaces: 1 }, () => {
+        console.log("AI 模型已準備就緒");
+    });
+    
+    // 開始持續偵測
+    faceMesh.detectStart(video, (results) => {
+        faces = results;
+    });
+
+    textAlign(CENTER, CENTER);
+}
+
+function draw() {
+    background(10, 15, 30, 80);
+
+    if (state === "INPUT") {
+        drawInputScreen();
+        handleMouseFollow(); // 螢火蟲跟著滑鼠飛
+    } 
+    else if (state === "DETECTING") {
+        drawDetectingScreen();
+        // 關鍵：一旦 AI 偵測到人臉，自動進入下一階段並播音樂
+        if (faces.length > 0) {
+            state = "CELEBRATING";
+            if (!bgMusic.isPlaying()) bgMusic.play();
+        }
+    } 
+    else if (state === "CELEBRATING") {
+        celebrate();
+    }
+
+    // 繪製粒子
+    for (let f of fireflies) {
+        f.update();
+        f.show();
+    }
+}
+
+// 1. 滑鼠追隨邏輯
+function handleMouseFollow() {
+    let mouseVec = createVector(mouseX, mouseY);
+    for (let f of fireflies) {
+        let d = dist(mouseVec.x, mouseVec.y, f.pos.x, f.pos.y);
+        if (d < 250) {
+            let force = p5.Vector.sub(mouseVec, f.pos);
+            force.setMag(0.2);
+            f.vel.add(force);
+        }
+    }
+}
+
+// 2. 輸入畫面
+function drawInputScreen() {
+    fill(255);
+    noStroke();
+    textSize(24);
+    text("輸入生日代碼查看驚喜 (MMDD)", width / 2, height / 2 - 40);
+    textSize(40);
+    let display = input.padEnd(4, '_').split('').join(' ');
+    text(display, width / 2, height / 2 + 20);
+}
+
+// 3. 偵測人臉畫面
+function drawDetectingScreen() {
+    fill(255, 200);
+    textSize(22);
+    text("密碼正確！\n請對準攝影機，等待系統感應人臉...", width / 2, height / 2);
+    
+    // 在中心淡淡顯示攝影機畫面，讓對方知道要對準
+    push();
+    translate(width/2, height/2 + 150);
+    imageMode(CENTER);
+    tint(255, 80);
+    image(video, 0, 0, 200, 150);
+    pop();
+}
+
+// 4. 慶祝與聚集
+function celebrate() {
+    if (!exploded) {
+        for (let f of fireflies) f.explode();
+        exploded = true;
+    }
+
+    // 延遲一下下再聚集
+    if (frameCount % 120 === 0 && !formed) {
+        generateText("王貞\n生日快樂");
+        assignTargets();
+        formed = true;
+    }
+
+    // 成形後自動截圖留念
+    if (formed && !photoTaken) {
+        let allArrived = fireflies.every(f => f.arrived || dist(f.pos.x, f.pos.y, f.target.x, f.target.y) < 5);
+        if (allArrived) {
+            setTimeout(() => {
+                saveCanvas('生日驚喜截圖', 'jpg');
+                photoTaken = true;
+            }, 1500);
+        }
+    }
+}
+
+// --- 輔助功能 ---
+
+function keyPressed() {
+    if (keyCode === BACKSPACE) input = input.slice(0, -1);
+}
+
+function keyTyped() {
+    if (key >= '0' && key <= '9' && input.length < 4) input += key;
+    if (input === "0415") {
+        state = "DETECTING";
+    }
+}
+
+function generateText(txt) {
+    let pg = createGraphics(width, height);
+    pg.pixelDensity(1);
+    pg.background(0);
+    pg.fill(255);
+    pg.textAlign(CENTER, CENTER);
+    pg.textSize(width < 600 ? width * 0.18 : 130);
+    pg.text(txt, width / 2, height / 2);
+    pg.loadPixels();
+    
+    targetPoints = [];
+    let gap = 6;
+    for (let x = 0; x < width; x += gap) {
+        for (let y = 0; y < height; y += gap) {
+            if (pg.pixels[(x + y * width) * 4] > 200) {
+                targetPoints.push(createVector(x, y));
+            }
+        }
+    }
+}
+
+function assignTargets() {
+    for (let i = 0; i < fireflies.length; i++) {
+        let t = targetPoints[i % targetPoints.length];
+        fireflies[i].setTarget(t.x, t.y);
+    }
+}
+
+class Firefly {
+    constructor(x, y) {
+        this.pos = createVector(x, y);
+        this.vel = p5.Vector.random2D().mult(2);
+        this.target = null;
+        this.ease = random(0.015, 0.04);
+        this.arrived = false;
+        this.size = random(2, 4);
+    }
+
+    setTarget(x, y) { this.target = createVector(x, y); }
+
+    explode() { this.vel = p5.Vector.random2D().mult(random(12, 22)); }
+
+    update() {
+        if (this.target) {
+            this.pos.x = lerp(this.pos.x, this.target.x, this.ease);
+            this.pos.y = lerp(this.pos.y, this.target.y, this.ease);
+            if (dist(this.pos.x, this.pos.y, this.target.x, this.target.y) < 1) this.arrived = true;
+        } else {
+            this.pos.add(this.vel);
+            this.vel.mult(0.96);
+        }
+    }
+
+    show() {
+        noStroke();
+        fill(255, 255, 180, random(180, 255));
+        ellipse(this.pos.x, this.pos.y, this.size);
+    }
+}
+
+function windowResized() { resizeCanvas(windowWidth, windowHeight); }
+</script>
+</body>
+</html>
